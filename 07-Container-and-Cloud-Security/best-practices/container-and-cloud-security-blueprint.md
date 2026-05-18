@@ -260,9 +260,9 @@ Block all public access at the bucket resource level, enforce KMS encryption at 
 
 | Layer | Recommended tools | Primary use |
 | --- | --- | --- |
-| Container images | Trivy, Hadolint, Cosign | Scanning, linting, signing |
+| Container images | Trivy, Grype, Syft, Hadolint, Cosign | Scanning, SBOM generation, linting, signing |
 | Kubernetes runtime | kube-bench, Kyverno, Falco | CIS benchmarks, admission control, runtime detection |
-| Cloud IAM | AWS IAM Access Analyzer, GCP Policy Analyzer | Unused permission auditing |
+| Cloud IAM | AWS IAM Access Analyzer, GCP Policy Analyzer, Azure PIM / Entra ID | Unused permission auditing, JIT access, RBAC governance |
 | IaC | Checkov, Trivy, KICS, Conftest (OPA) | Misconfiguration detection, policy-as-code |
 
 Selection criteria for any tool in this space:
@@ -414,7 +414,7 @@ The incident is also a concrete illustration of why image scanning alone is insu
 ---
 
 **Contributed by:** Tomás Brás
-**Last Updated:** 2026-05-17
+**Last Updated:** 2026-05-18
 **Difficulty Level:** Intermediate
 **Impact:** High
 
