@@ -87,7 +87,7 @@ Minimum controls:
 
 For high-risk or multi-tenant workloads, two alternatives to runC address the shared-kernel problem at the architecture level [4][5]:
 
-- **gVisor** interposes a user-space kernel (Sentry) between the application and the host kernel. Sentry intercepts every system call and implements most of the Linux syscall API in user space; a separate Gofer process handles file system access via 9P. This achieves the strongest isolation: performance loss rate of 0.078–0.094 under resource contention, roughly one-third that of runC. The costs are significant: syscall overhead ~50% in KVM mode and ~95% in ptrace mode (ptrace should be avoided for syscall-heavy workloads); I/O degrades severely under concurrency (Blogbench read score drops from 654,280 to ~88 in ptrace mode); and network throughput collapses to ~655 KB/s versus 96,662 KB/s on bare metal due to the user-space network stack [5]. Memory footprint is ~8 MB per container. Prefer gVisor for security-critical workloads with low I/O concurrency and low network throughput requirements; always use KVM mode over ptrace.
+- **gVisor** interposes a user-space kernel (Sentry) between the application and the host kernel. Sentry intercepts every system call and implements most of the Linux syscall API in user space; a separate Gofer process handles file system access via 9P. This architecture provides the strongest isolation among the three runtimes: under resource contention, containers interfere with each other significantly less than under runC, because the user-space interception prevents cross-container kernel-level interference. The costs are significant: syscall overhead ~50% in KVM mode and ~95% in ptrace mode (ptrace should be avoided for syscall-heavy workloads); I/O degrades severely under concurrency; and network throughput collapses to ~655 KB/s versus 96,662 KB/s on bare metal due to the user-space network stack [5]. Memory footprint is ~8 MB per container. Prefer gVisor for security-critical workloads with low I/O concurrency and low network throughput requirements; always use KVM mode over ptrace.
 
 - **Kata Containers** runs each container inside a dedicated lightweight VM with its own guest kernel, communicating with the host kata-runtime via gRPC; the VM supports hotplug to start with minimal resources and add CPU or memory on demand. CPU and network performance are near runC; sequential I/O overhead is moderate (12–17%); syscall overhead is under 1%; and startup is only ~0.44 s slower than runC. The key constraints are memory (~110 MB per container) and density: above ~40 simultaneous containers on an 8 GB host, memory exhaustion causes startup time to spike by over 100% [5]. Prefer Kata when hardware isolation is required but I/O, syscall, or network throughput cannot be compromised.
 
@@ -164,75 +164,6 @@ Treat IaC changes as deployable security changes:
 - review `terraform plan` or `helm diff` before apply so reviewers see the effective change, not only the source diff;
 - detect drift after deployment with CSPM or scheduled plans, and move manual console changes back into IaC.
 
-## Code Examples
-
-### Dockerfile
-
-```dockerfile
-# Vulnerable
-FROM ubuntu:latest                         # unpinned, ~400 packages
-RUN apt-get install -y gcc build-essential # build tools leak into final image
-CMD ["python3", "app.py"]                  # no USER - runs as root
-
-# Secure
-FROM python:3.12-slim AS builder           # pinned minimal base
-RUN pip install --no-cache-dir -r requirements.txt
-FROM python:3.12-slim                      # build tools stay in builder stage
-COPY --from=builder /usr/local /usr/local
-USER appuser                               # non-root
-CMD ["python3", "-m", "gunicorn", "app:app"]
-```
-
-A multi-stage build keeps compilers and package managers out of the final image. A pinned non-root base eliminates the two most common Dockerfile risks without any runtime cost.
-
-### Kubernetes workload
-
-```yaml
-# Vulnerable
-image: myregistry/api:latest   # mutable tag
-securityContext:
-  privileged: true             # collapses all isolation
-env:
-  - name: DB_PASSWORD
-    value: "secret-123"        # visible in kubectl describe
-
-# Secure
-image: myregistry/api@sha256:abc123...
-securityContext:
-  runAsNonRoot: true
-  allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: true
-  capabilities:
-    drop: ["ALL"]
-# secret mounted from external store via CSI driver, not env var
-```
-
-Drop all capabilities, pin to a digest, enforce non-root and read-only filesystem, and inject secrets via an external store. These four fields together eliminate the most exploitable workload misconfigurations.
-
-### Terraform (S3)
-
-```hcl
-# Vulnerable
-acl = "public-read"  # exposes all objects to the internet
-# no encryption, no logging
-
-# Secure
-block_public_acls       = true
-restrict_public_buckets = true
-sse_algorithm           = "aws:kms"  # encryption at rest
-# access logging enabled via aws_s3_bucket_logging
-```
-
-Block all public access at the bucket resource level, enforce KMS encryption at rest, and enable access logging - three controls that Checkov and tfsec will flag as absent if missing.
-
-## Benefits
-
-- **Smaller blast radius:** Minimal images and non-root containers limit what an attacker can access after a compromise.
-- **Deterministic deployments:** Pinned image digests and IaC make every deployment reproducible and auditable.
-- **Reduced credential exposure:** Workload identity and external secret stores eliminate long-lived credentials from code and environment variables.
-- **Faster misconfiguration detection:** Shift-left IaC scanning catches cloud misconfigurations before they reach production.
-- **Traceable access:** RBAC and least-privilege IAM create a clear, auditable record of what each identity can do.
-
 ## Common Pitfalls
 
 - Running containers as root because the base image default was never changed.
@@ -260,7 +191,7 @@ Block all public access at the bucket resource level, enforce KMS encryption at 
 
 | Layer | Recommended tools | Primary use |
 | --- | --- | --- |
-| Container images | Trivy, Grype, Syft, Hadolint, Cosign | Scanning, SBOM generation, linting, signing |
+| Container images | Trivy, Grype, Hadolint, Cosign | Scanning, SBOM generation, linting, signing |
 | Kubernetes runtime | kube-bench, Kyverno, Falco | CIS benchmarks, admission control, runtime detection |
 | Cloud IAM | AWS IAM Access Analyzer, GCP Policy Analyzer, Azure PIM / Entra ID | Unused permission auditing, JIT access, RBAC governance |
 | IaC | Checkov, Trivy, KICS, Conftest (OPA) | Misconfiguration detection, policy-as-code |
@@ -377,30 +308,20 @@ The incident is also a concrete illustration of why image scanning alone is insu
 
 | Acronym | Meaning |
 | --- | --- |
-| ACL | Access Control List |
-| ARN | Amazon Resource Name |
-| BGP | Border Gateway Protocol |
 | CIS | Center for Internet Security |
-| CNCF | Cloud Native Computing Foundation |
 | CNI | Container Network Interface |
 | CSPM | Cloud Security Posture Management |
-| CSI | Container Storage Interface |
 | CVE | Common Vulnerabilities and Exposures |
-| eBPF | Extended Berkeley Packet Filter |
 | IAM | Identity and Access Management |
 | IaC | Infrastructure as Code |
 | IMDS | Instance Metadata Service |
-| IRSA | IAM Roles for Service Accounts |
-| K8s | Kubernetes |
 | LSM | Linux Security Module |
 | MAC | Mandatory Access Control |
 | MFA | Multi-Factor Authentication |
 | mTLS | Mutual Transport Layer Security |
 | NIST | National Institute of Standards and Technology |
 | OCI | Open Container Initiative |
-| OIDC | OpenID Connect |
 | OPA | Open Policy Agent |
-| PSS | Pod Security Standards |
 | RBAC | Role-Based Access Control |
 | SARIF | Static Analysis Results Interchange Format |
 | SBOM | Software Bill of Materials |
@@ -414,7 +335,7 @@ The incident is also a concrete illustration of why image scanning alone is insu
 ---
 
 **Contributed by:** Tomás Brás
-**Last Updated:** 2026-05-18
+**Last Updated:** 2026-05-19
 **Difficulty Level:** Intermediate
 **Impact:** High
 
